@@ -445,7 +445,7 @@ void ncxb_draw(void) {
 
     if(active->noutputs <= 0) {
         char str[128];
-        sprintf("no outputs found with valid backlight property");
+        sprintf(str, "no outputs found with valid backlight property");
         mvaddstr((height - strlen(str)) / 2, width / 2, str);
     }
 
