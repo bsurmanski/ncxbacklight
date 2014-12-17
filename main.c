@@ -16,9 +16,23 @@
 
 WINDOW *window;
 
+typedef struct {
+    xcb_randr_output_t output;
+    long value;
+    long min;
+    long max;
+} ncxb_output_t;
+
+typedef struct {
+    xcb_window_t window;
+    long selected; //selected output
+    long noutputs;
+    ncxb_output_t *outputs;
+} ncxb_screen_t;
+
 static xcb_atom_t backlight;
-static xcb_connection_t *conn;
-static long value = 0;
+static xcb_connection_t *conn = NULL;
+static ncxb_screen_t *screens;
 static int width = 0;
 static int height = 0;
 static bool ncxb_clear = false;
@@ -30,16 +44,92 @@ static void ncxb_set(xcb_connection_t *conn, xcb_randr_output_t output, long val
 
 static long ncxb_get(xcb_connection_t *conn, xcb_randr_output_t output) {
     xcb_generic_error_t *error;
+    xcb_randr_get_output_property_cookie_t prop_cookie;
     xcb_randr_get_output_property_reply_t *prop_reply = NULL;
-
     long value;
+
+    if(backlight != XCB_ATOM_NONE) {
+        prop_cookie = xcb_randr_get_output_property(conn, output, backlight,
+                                                    XCB_ATOM_NONE,
+                                                    0, 4, 0, 0);
+        prop_reply = xcb_randr_get_output_property_reply(conn, prop_cookie, &error);
+    }
+
+    if(prop_reply == NULL ||
+            prop_reply->type != XCB_ATOM_INTEGER ||
+            prop_reply->num_items != 1 ||
+            prop_reply->format != 32) {
+        value = -1;
+    } else {
+        value = *((int32_t*) xcb_randr_get_output_property_data(prop_reply));
+    }
+
+    free(prop_reply);
+
     return value;
+}
+
+// backlight range; min and max
+static void ncxb_range(xcb_connection_t *conn, xcb_randr_output_t output, int *min, int *max) {
+    xcb_generic_error_t *error;
+    xcb_randr_query_output_property_cookie_t prop_cookie;
+    xcb_randr_query_output_property_reply_t *prop_reply = NULL;
+
+    prop_cookie = xcb_randr_query_output_property(conn, output, backlight);
+    prop_reply = xcb_randr_query_output_property_reply(conn, prop_cookie, &error);
+
+    // could not get range
+    if(error || !prop_reply) goto CONTINUE;
+
+    if(prop_reply->range &&
+            xcb_randr_query_output_property_valid_values_length(prop_reply) == 2) {
+        int32_t *values = xcb_randr_query_output_property_valid_values(prop_reply);
+
+        if(min) *min = values[0];
+        if(max) *max = values[1];
+    }
+
+CONTINUE:
+    free(prop_reply);
+}
+
+static xcb_atom_t ncxb_get_backlight_atom(xcb_connection_t *conn) {
+    xcb_atom_t ret;
+    xcb_generic_error_t *error;
+    xcb_intern_atom_cookie_t backlight_cookie[2];
+    backlight_cookie[0] = xcb_intern_atom(conn, 1, strlen("Backlight"), "Backlight");
+    backlight_cookie[1] = xcb_intern_atom(conn, 1, strlen("BACKLIGHT"), "BACKLIGHT");
+    xcb_intern_atom_reply_t *backlight_reply = xcb_intern_atom_reply(conn, backlight_cookie[0], &error);
+    if(error || !backlight_reply) goto CONTINUE;
+    ret = backlight_reply->atom;
+
+    if(ret == XCB_NONE) {
+        free(backlight_reply);
+        xcb_intern_atom_reply_t *backlight_reply = xcb_intern_atom_reply(conn, backlight_cookie[1], &error);
+        if(error || !backlight_reply) goto CONTINUE;
+        ret = backlight_reply->atom;
+    }
+
+CONTINUE:
+    free(backlight_reply);
+    return ret;
 }
 
 void ncxb_exit(void);
 void ncxb_handle_signal(int sig) {
     ncxb_exit();
     exit(0);
+}
+
+unsigned ncxb_count_screens(xcb_connection_t *conn) {
+    unsigned ret = 0;
+    xcb_screen_iterator_t iter;
+    iter = xcb_setup_roots_iterator(xcb_get_setup(conn));
+    while(iter.rem) {
+        ret++;
+        xcb_screen_next(&iter);
+    }
+    return ret;
 }
 
 void ncxb_init_ncurses(void) {
@@ -55,6 +145,69 @@ void ncxb_init_ncurses(void) {
     getmaxyx(window, height, width);
 }
 
+ncxb_output_t ncxb_create_output(xcb_randr_output_t xoutput) {
+    ncxb_output_t output;
+    int min, max;
+    ncxb_range(conn, xoutput, &min, &max);
+
+    output.output = xoutput;
+    output.min = min;
+    output.max = max;
+    output.value = ncxb_get(conn, xoutput);
+    return output;
+}
+
+ncxb_screen_t ncxb_create_screen(xcb_window_t root) {
+        ncxb_screen_t screen;
+        xcb_generic_error_t *error;
+
+        xcb_randr_get_screen_resources_cookie_t resources_cookie;
+        xcb_randr_get_screen_resources_reply_t *resources_reply;
+
+        resources_cookie = xcb_randr_get_screen_resources(conn, root);
+        resources_reply = xcb_randr_get_screen_resources_reply(conn, resources_cookie, &error);
+        if(error || !resources_reply) {
+            int ec = error ? error->error_code : -1;
+            fprintf(stderr, "RANDR Get Screen Resources returned error %d\n", ec);
+            exit(-1);
+            //return screen; //XXX handle error
+        }
+
+        xcb_randr_output_t *outputs = xcb_randr_get_screen_resources_outputs(resources_reply);
+
+        screen.window = root;
+        screen.noutputs = resources_reply->num_outputs;
+        screen.outputs = malloc(sizeof(ncxb_output_t) * screen.noutputs);
+
+        int i;
+        for(i = 0; i < resources_reply->num_outputs; i++) {
+            xcb_randr_output_t output = outputs[i];
+            screen.outputs[i] = ncxb_create_output(output);
+        }
+
+        free(resources_reply);
+        return screen;
+}
+
+void ncxb_init_xcb(void) {
+    conn = xcb_connect(NULL, NULL); // just get the default display
+    backlight = ncxb_get_backlight_atom(conn);
+
+    int nscreens = ncxb_count_screens(conn);
+    screens = malloc(sizeof(ncxb_screen_t) * nscreens);
+
+    xcb_screen_iterator_t iter;
+    iter = xcb_setup_roots_iterator(xcb_get_setup(conn));
+
+    int i = 0;
+    while(iter.rem) {
+        xcb_screen_t *screen = iter.data;
+        screens[i] = ncxb_create_screen(screen->root);
+        i++;
+        xcb_screen_next(&iter);
+    }
+}
+
 void ncxb_init(void) {
     signal(SIGINT, ncxb_handle_signal);
     signal(SIGQUIT, ncxb_handle_signal);
@@ -63,7 +216,7 @@ void ncxb_init(void) {
     ncxb_init_ncurses();
 
     // xrandr
-    conn = xcb_connect(NULL, NULL);
+    ncxb_init_xcb();
 }
 
 void ncxb_exit_ncurses(void) {
@@ -76,6 +229,7 @@ void ncxb_exit_ncurses(void) {
     window = NULL;
 }
 
+
 void ncxb_exit(void) {
     // ncurses
     ncxb_exit_ncurses();
@@ -84,17 +238,67 @@ void ncxb_exit(void) {
     xcb_aux_sync(conn);
 }
 
-void update_values(void) {
-}
+/*
+void ncxb_update_get_values(void) {
+    xcb_generic_error_t *error;
+    xcb_screen_iterator_t iter;
+    iter = xcb_setup_roots_iterator(xcb_get_setup(conn));
+    while(iter.rem) {
+        xcb_screen_t *screen = iter.data;
+        xcb_window_t root = screen->root;
 
-void update(void) {
+        xcb_randr_get_screen_resources_cookie_t resources_cookie;
+        xcb_randr_get_screen_resources_reply_t *resources_reply;
+
+        resources_cookie = xcb_randr_get_screen_resources(conn, root);
+        resources_reply = xcb_randr_get_screen_resources_reply(conn, resources_cookie, &error);
+        if(error || !resources_reply) {
+            int ec = error ? error->error_code : -1;
+            fprintf(stderr, "RANDR Get Screen Resources returned error %d\n", ec);
+            continue;
+        }
+
+        xcb_randr_output_t *outputs = xcb_randr_get_screen_resources_outputs(resources_reply);
+        int i;
+        for(i = 0; i < resources_reply->num_outputs; i++) {
+            xcb_randr_output_t output = outputs[i];
+            int min = 0, max = 0, val = 0;
+            ncxb_range(conn, output, &min, &max);
+            if(!min && !max) continue;
+            val = ncxb_get(conn, output);
+            values[i] = val * 100 / max;
+            xcb_aux_sync(conn);
+            //ncxb_set(conn, output, value);
+            xcb_flush(conn);
+            usleep(200);
+        }
+
+        free(resources_reply);
+        xcb_screen_next(&iter);
+    }
+}
+*/
+
+void ncxb_update_active_screen(ncxb_screen_t *scr) {
     int key = getch();
+    ncxb_output_t *active_out = &scr->outputs[0]; // XXX
+
     switch(key) {
         case KEY_UP:
-            value += 5;
+            active_out->value += 5;
+            if(active_out->value > 100) active_out->value = 100;
             break;
         case KEY_DOWN:
-            value -= 5;
+            active_out->value -= 5;
+            if(active_out->value < 100) active_out->value = 0;
+            break;
+        case KEY_LEFT:
+            scr->selected--;
+            if(scr->selected < 0) scr->selected = 0;
+            break;
+        case KEY_RIGHT:
+            scr->selected++;
+            if(scr->selected >= scr->noutputs) scr->selected = scr->noutputs-1;
             break;
         case '\014':
         case 'L':
@@ -102,9 +306,10 @@ void update(void) {
             ncxb_clear = true;
             break;
     }
+}
 
-    if(value > 100) value = 100;
-    if(value < 0) value = 0;
+void ncxb_update(void) {
+    ncxb_update_active_screen(&screens[0]);
 }
 
 void draw_value_bar(int x, int y, int h, long barval, char *barnm) {
@@ -178,65 +383,28 @@ void draw_frame(int w, int h) {
 }
 
 void draw(void) {
-    //attrset(COLOR_PAIR(0)
     if(ncxb_clear) {
         clearok(window, true);
     }
 
-    draw_value_bar(width / 2 - 2, height - 5, height - 8, value, "Main");
+    ncxb_screen_t *active = &screens[0];
+
+    int i;
+    for(i = 0; i < active->noutputs; i++) {
+        draw_value_bar((i+1) * (width / (active->noutputs + 1)) - 2, height - 5, height - 8, active->outputs[i].value, "Main");
+    }
+
     draw_frame(width, height);
     refresh();
 }
 
+
 int main(int argc, char **argv) {
     ncxb_init();
 
-    xcb_generic_error_t *error;
-
-    xcb_intern_atom_cookie_t backlight_cookie = xcb_intern_atom(conn, 1, strlen("Backlight"), "Backlight");
-    xcb_intern_atom_reply_t *backlight_reply = xcb_intern_atom_reply(conn, backlight_cookie, &error);
-    backlight = backlight_reply->atom;
-    free(backlight_reply);
-
-    xcb_screen_iterator_t iter;
-    iter = xcb_setup_roots_iterator(xcb_get_setup(conn));
-    while(iter.rem) {
-        //resources_cookie = xcb_randr_get_screen_resources(conn,
-        xcb_screen_t *screen = iter.data;
-        xcb_window_t root = screen->root;
-
-        xcb_randr_get_screen_resources_cookie_t resources_cookie;
-        xcb_randr_get_screen_resources_reply_t *resources_reply;
-
-        resources_cookie = xcb_randr_get_screen_resources(conn, root);
-        resources_reply = xcb_randr_get_screen_resources_reply(conn, resources_cookie, &error);
-        if(error || !resources_reply) {
-            int ec = error ? error->error_code : -1;
-            fprintf(stderr, "RANDR Get Screen Resources returned error %d\n", ec);
-            continue;
-        }
-
-        xcb_randr_output_t *outputs = xcb_randr_get_screen_resources_outputs(resources_reply);
-        int i;
-        for(i = 0; i < resources_reply->num_outputs; i++) {
-            xcb_randr_output_t output = outputs[i];
-            double cur;
-
-            cur = ncxb_get(conn, output);
-            xcb_aux_sync(conn);
-            ncxb_set(conn, output, 500);
-            xcb_flush(conn);
-            usleep(200);
-        }
-
-        free(resources_reply);
-        xcb_screen_next(&iter);
-    }
-
-
     while(true) {
         draw();
-        update();
+        ncxb_update();
     }
 
     ncxb_exit();
