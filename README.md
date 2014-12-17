@@ -5,7 +5,7 @@ Use the arrow keys to adjust the values of backlight brightness from the termina
 
 ### Screenshot
 
-![main screen](/screenshot/01.png?raw=true)
+![main screen](/screenshot/02.png?raw=true)
 
 ### License
 
