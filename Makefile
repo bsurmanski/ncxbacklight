@@ -5,3 +5,5 @@ all:
 
 install: ncxbacklight
 	sudo cp ncxbacklight $(prefix)/bin/ncxbacklight
+
+check:
