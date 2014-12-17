@@ -117,8 +117,14 @@ CONTINUE:
 
 void ncxb_exit(void);
 void ncxb_handle_signal(int sig) {
+    int err = 0;
+    if(sig == SIGSEGV) {
+        fprintf(stderr, "Segmentation fault.");
+        err = -1;
+    }
     ncxb_exit();
-    exit(0);
+
+    exit(err);
 }
 
 unsigned ncxb_count_screens(xcb_connection_t *conn) {
@@ -176,6 +182,7 @@ ncxb_screen_t ncxb_create_screen(xcb_window_t root) {
         xcb_randr_output_t *outputs = xcb_randr_get_screen_resources_outputs(resources_reply);
 
         screen.window = root;
+        screen.selected = 0;
         screen.noutputs = resources_reply->num_outputs;
         screen.outputs = malloc(sizeof(ncxb_output_t) * screen.noutputs);
 
@@ -187,6 +194,13 @@ ncxb_screen_t ncxb_create_screen(xcb_window_t root) {
 
         free(resources_reply);
         return screen;
+}
+
+void ncxb_screen_sync_outputs(ncxb_screen_t *screen) {
+    int i;
+    for(i = 0; i < screen->noutputs; i++) {
+        screen->outputs[i].value = ncxb_get(conn, screen->outputs[i].output);
+    }
 }
 
 void ncxb_init_xcb(void) {
@@ -212,6 +226,7 @@ void ncxb_init(void) {
     signal(SIGINT, ncxb_handle_signal);
     signal(SIGQUIT, ncxb_handle_signal);
     signal(SIGTERM, ncxb_handle_signal);
+    signal(SIGSEGV, ncxb_handle_signal);
     // ncurses
     ncxb_init_ncurses();
 
@@ -238,59 +253,24 @@ void ncxb_exit(void) {
     xcb_aux_sync(conn);
 }
 
-/*
-void ncxb_update_get_values(void) {
-    xcb_generic_error_t *error;
-    xcb_screen_iterator_t iter;
-    iter = xcb_setup_roots_iterator(xcb_get_setup(conn));
-    while(iter.rem) {
-        xcb_screen_t *screen = iter.data;
-        xcb_window_t root = screen->root;
-
-        xcb_randr_get_screen_resources_cookie_t resources_cookie;
-        xcb_randr_get_screen_resources_reply_t *resources_reply;
-
-        resources_cookie = xcb_randr_get_screen_resources(conn, root);
-        resources_reply = xcb_randr_get_screen_resources_reply(conn, resources_cookie, &error);
-        if(error || !resources_reply) {
-            int ec = error ? error->error_code : -1;
-            fprintf(stderr, "RANDR Get Screen Resources returned error %d\n", ec);
-            continue;
-        }
-
-        xcb_randr_output_t *outputs = xcb_randr_get_screen_resources_outputs(resources_reply);
-        int i;
-        for(i = 0; i < resources_reply->num_outputs; i++) {
-            xcb_randr_output_t output = outputs[i];
-            int min = 0, max = 0, val = 0;
-            ncxb_range(conn, output, &min, &max);
-            if(!min && !max) continue;
-            val = ncxb_get(conn, output);
-            values[i] = val * 100 / max;
-            xcb_aux_sync(conn);
-            //ncxb_set(conn, output, value);
-            xcb_flush(conn);
-            usleep(200);
-        }
-
-        free(resources_reply);
-        xcb_screen_next(&iter);
-    }
-}
-*/
-
 void ncxb_update_active_screen(ncxb_screen_t *scr) {
     int key = getch();
-    ncxb_output_t *active_out = &scr->outputs[0]; // XXX
+
+    ncxb_screen_sync_outputs(scr);
+    ncxb_output_t *active_out = &scr->outputs[scr->selected]; // XXX
+
+    bool update = false;
 
     switch(key) {
         case KEY_UP:
             active_out->value += 5;
             if(active_out->value > 100) active_out->value = 100;
+            update = true;
             break;
         case KEY_DOWN:
             active_out->value -= 5;
-            if(active_out->value < 100) active_out->value = 0;
+            if(active_out->value < 0) active_out->value = 0;
+            update = true;
             break;
         case KEY_LEFT:
             scr->selected--;
@@ -306,13 +286,17 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
             ncxb_clear = true;
             break;
     }
+
+    if(update) {
+        ncxb_set(conn, active_out->output, active_out->value);
+    }
 }
 
 void ncxb_update(void) {
     ncxb_update_active_screen(&screens[0]);
 }
 
-void draw_value_bar(int x, int y, int h, long barval, char *barnm) {
+void draw_value_bar(int x, int y, int h, long barval) {
     // draw bottom of bar
     mvaddch(y, x+2, ACS_LLCORNER);
     mvaddch(y, x+3, ACS_HLINE);
@@ -346,12 +330,6 @@ void draw_value_bar(int x, int y, int h, long barval, char *barnm) {
     snprintf(valuestr, sizeof(valuestr), "%ld", barval);
     mvaddstr(y+1, x+2, "        ");
     mvaddstr(y+1, x+3 - (barval >= 100), valuestr);
-
-    // write name of bar
-    if(barnm) {
-        mvaddstr(y+2, x+2, "        ");
-        mvaddstr(y+2, x+3 - strlen(barnm)/2, barnm);
-    }
 }
 
 void draw_frame(int w, int h) {
@@ -391,7 +369,19 @@ void draw(void) {
 
     int i;
     for(i = 0; i < active->noutputs; i++) {
-        draw_value_bar((i+1) * (width / (active->noutputs + 1)) - 2, height - 5, height - 8, active->outputs[i].value, "Main");
+        int x = (i+1) * (width / (active->noutputs + 1)) - 2;
+        int y = height - 5;
+        draw_value_bar(x, y, height - 8, active->outputs[i].value);
+
+        char barnm[128];
+        if(active->selected == i) {
+            sprintf(barnm, "<%s>", "OUT");
+        } else {
+            sprintf(barnm, "%s", "OUT");
+        }
+
+        mvaddstr(y+2, x+1, "        ");
+        mvaddstr(y+2, x+3 - strlen(barnm)/2, barnm);
     }
 
     draw_frame(width, height);
