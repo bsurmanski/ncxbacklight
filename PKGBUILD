@@ -1,7 +1,7 @@
 # Maintainer: Brandon Surmanski <b.surmanski@gmail.com>
 
 pkgname=ncxbacklight-git
-pkgver=v0.1.r1.g12ba77c
+pkgver=v0.1.r2.gdbe846e
 pkgrel=1
 epoch=
 pkgdesc="NCurses Interface for XBacklight"
@@ -41,8 +41,9 @@ check() {
 }
 
 package() {
-    cd "$srcdir/$pkgname-pkgver"
-    install -Dm644 "$pkgdir/usr/bin/"
+    cd "$srcdir/$pkgname"
+    mkdir -p "$pkgdir/usr/bin/"
+    install -Dm644 ncxbacklight "$pkgdir/usr/bin/"
 }
 
 #vim:set ts=2 sw=2 et:
