@@ -14,6 +14,9 @@
 #include <sys/signal.h>
 #include <unistd.h>
 
+#define PROGNAME "NCXBacklight"
+#define PROGVER "0.1"
+
 WINDOW *window;
 
 typedef struct {
@@ -261,7 +264,9 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
 
     bool update = false;
 
-    float step = (active_out->max - active_out->min) / 20.0f;
+    // 5% steps
+    float ten_percent = (active_out->max - active_out->min) / 10.0f;
+    float step = ten_percent / 2.0f;
     switch(key) {
         case KEY_UP:
             active_out->value += step;
@@ -286,10 +291,24 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
         case 'l':
             ncxb_clear = true;
             break;
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+            active_out->value = (ten_percent * (key -'0')) + active_out->min;
+            update= true;
+            break;
     }
 
     if(update) {
         ncxb_set(conn, active_out->output, active_out->value);
+        xcb_aux_sync(conn);
     }
 }
 
@@ -354,9 +373,10 @@ void draw_frame(int w, int h) {
     mvaddch(h-1, 0, ACS_LLCORNER);
     mvaddch(h-1, w-1, ACS_LRCORNER);
 
+    // draw frame title
     char title[128];
     int titlelen;
-    sprintf(title, "%s v%s", "NCXBacklight", "0.1");
+    sprintf(title, "%s v%s", PROGNAME, PROGVER);
     titlelen = strlen(title);
     mvaddstr(0, w / 2 - titlelen / 2, title);
 }
