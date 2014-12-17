@@ -257,19 +257,20 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
     int key = getch();
 
     ncxb_screen_sync_outputs(scr);
-    ncxb_output_t *active_out = &scr->outputs[scr->selected]; // XXX
+    ncxb_output_t *active_out = &scr->outputs[scr->selected];
 
     bool update = false;
 
+    float step = (active_out->max - active_out->min) / 20.0f;
     switch(key) {
         case KEY_UP:
-            active_out->value += 5;
-            if(active_out->value > 100) active_out->value = 100;
+            active_out->value += step;
+            if(active_out->value > active_out->max) active_out->value = active_out->max;
             update = true;
             break;
         case KEY_DOWN:
-            active_out->value -= 5;
-            if(active_out->value < 0) active_out->value = 0;
+            active_out->value -= step;
+            if(active_out->value < active_out->min) active_out->value = active_out->min;
             update = true;
             break;
         case KEY_LEFT:
@@ -360,7 +361,7 @@ void draw_frame(int w, int h) {
     mvaddstr(0, w / 2 - titlelen / 2, title);
 }
 
-void draw(void) {
+void ncxb_draw(void) {
     if(ncxb_clear) {
         clearok(window, true);
     }
@@ -371,7 +372,7 @@ void draw(void) {
     for(i = 0; i < active->noutputs; i++) {
         int x = (i+1) * (width / (active->noutputs + 1)) - 2;
         int y = height - 5;
-        draw_value_bar(x, y, height - 8, active->outputs[i].value);
+        draw_value_bar(x, y, height - 8, active->outputs[i].value * 100 / active->outputs[i].max);
 
         char barnm[128];
         if(active->selected == i) {
@@ -393,7 +394,7 @@ int main(int argc, char **argv) {
     ncxb_init();
 
     while(true) {
-        draw();
+        ncxb_draw();
         ncxb_update();
     }
 
