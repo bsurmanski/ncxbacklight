@@ -103,7 +103,11 @@ static void ncxb_range(xcb_connection_t *conn, xcb_randr_output_t output, int *m
     prop_reply = xcb_randr_query_output_property_reply(conn, prop_cookie, &error);
 
     // could not get range
-    if(error || !prop_reply) goto CONTINUE;
+    if(error || !prop_reply) {
+        if(min) *min = -1;
+        if(max) *max = -1;
+        goto CONTINUE;
+    }
 
     if(prop_reply->range &&
             xcb_randr_query_output_property_valid_values_length(prop_reply) == 2) {
@@ -210,10 +214,19 @@ ncxb_screen_t ncxb_create_screen(xcb_window_t root) {
         screen.noutputs = resources_reply->num_outputs;
         screen.outputs = malloc(sizeof(ncxb_output_t) * screen.noutputs);
 
+        int n;
         int i;
-        for(i = 0; i < resources_reply->num_outputs; i++) {
-            xcb_randr_output_t output = outputs[i];
+        for(i = 0, n = 0; i < resources_reply->num_outputs; i++, n++) {
+            xcb_randr_output_t output = outputs[n];
             screen.outputs[i] = ncxb_create_output(output);
+
+            // skip any screens that have invalid ranges
+            if(screen.outputs[i].max <= 0 ||
+                    screen.outputs[i].min >= screen.outputs[i].max) {
+                screen.noutputs--;
+                n++;
+                continue;
+            }
         }
 
         free(resources_reply);
