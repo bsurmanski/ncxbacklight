@@ -293,7 +293,11 @@ void ncxb_exit(void) {
 void ncxb_update_active_screen(ncxb_screen_t *scr) {
     int key = getch();
 
+    // active screen has no valid outputs
+    if(scr->noutputs <= 0) return;
+
     ncxb_screen_sync_outputs(scr);
+
     ncxb_output_t *active_out = &scr->outputs[scr->selected];
 
     bool update = false;
@@ -437,6 +441,12 @@ void ncxb_draw(void) {
 
         mvaddstr(y+2, x+1, "        ");
         mvaddstr(y+2, x+3 - strlen(barnm)/2, barnm);
+    }
+
+    if(active->noutputs <= 0) {
+        char str[128];
+        sprintf("no outputs found with valid backlight property");
+        mvaddstr((height - strlen(str)) / 2, width / 2, str);
     }
 
     draw_frame(width, height);
