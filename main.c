@@ -35,6 +35,7 @@
 #include <sys/signal.h>
 #include <unistd.h>
 
+#define PROGCMD "ncxbacklight"
 #define PROGNAME "NCXBacklight"
 #define PROGVER "0.1"
 
@@ -60,6 +61,7 @@ static ncxb_screen_t *screens;
 static int width = 0;
 static int height = 0;
 static bool ncxb_clear = false;
+static bool ncxb_usecolor = true;
 
 static void ncxb_set(xcb_connection_t *conn, xcb_randr_output_t output, long value) {
     xcb_randr_change_output_property(conn, output, backlight, XCB_ATOM_INTEGER, 32,
@@ -171,10 +173,13 @@ void ncxb_init_ncurses(void) {
     curs_set(0); // hide cursor
     leaveok(window, true);
     keypad(window, true);
-    start_color();
-    init_pair(1, COLOR_WHITE & 0xf, COLOR_BLACK * 0x0f);
-    //attrset(COLOR_PAIR(1) | (COLOR_WHITE & 0xfffffff0));
-    attron(COLOR_PAIR(1));
+
+    if(ncxb_usecolor) {
+        start_color();
+        init_pair(1, COLOR_WHITE & 0xf, COLOR_BLACK * 0x0f);
+        attrset(COLOR_PAIR(1) | (COLOR_WHITE & 0xfffffff0));
+        attron(COLOR_PAIR(1));
+    }
 
     getmaxyx(window, height, width);
 }
@@ -259,11 +264,28 @@ void ncxb_init_xcb(void) {
     }
 }
 
-void ncxb_init(void) {
+void ncxb_init(int argc, char **argv) {
     signal(SIGINT, ncxb_handle_signal);
     signal(SIGQUIT, ncxb_handle_signal);
     signal(SIGTERM, ncxb_handle_signal);
     signal(SIGSEGV, ncxb_handle_signal);
+
+    int opt;
+    do {
+        opt = getopt(argc, argv, "hg");
+        switch(opt) {
+            case 'g':
+                ncxb_usecolor = false;
+                break;
+            case 'h':
+            case '?':
+                fprintf(stderr, "%s v%s\n", PROGNAME, PROGVER);
+                fprintf(stderr, "Usage: %s [-h] [-g]\n", PROGCMD);
+                exit(0);
+                break;
+        }
+    } while (opt > 0);
+
     // ncurses
     ncxb_init_ncurses();
 
@@ -455,7 +477,7 @@ void ncxb_draw(void) {
 
 
 int main(int argc, char **argv) {
-    ncxb_init();
+    ncxb_init(argc, argv);
 
     while(true) {
         ncxb_draw();
