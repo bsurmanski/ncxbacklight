@@ -312,11 +312,19 @@ void ncxb_exit(void) {
     xcb_aux_sync(conn);
 }
 
-void ncxb_update_active_screen(ncxb_screen_t *scr) {
+void clamp_max(ncxb_output_t *active_out) {
+    if(active_out->value > active_out->max) active_out->value = active_out->max;
+}
+
+void clamp_min(ncxb_output_t *active_out) {
+    if(active_out->value < active_out->min) active_out->value = active_out->min;
+}
+
+bool ncxb_update_active_screen(ncxb_screen_t *scr) {
     int key = getch();
 
     // active screen has no valid outputs
-    if(scr->noutputs <= 0) return;
+    if(scr->noutputs <= 0) return true;
 
     ncxb_screen_sync_outputs(scr);
 
@@ -330,12 +338,12 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
     switch(key) {
         case KEY_UP:
             active_out->value += step;
-            if(active_out->value > active_out->max) active_out->value = active_out->max;
+            clamp_max(active_out);
             update = true;
             break;
         case KEY_DOWN:
             active_out->value -= step;
-            if(active_out->value < active_out->min) active_out->value = active_out->min;
+            clamp_min(active_out);
             update = true;
             break;
         case KEY_LEFT:
@@ -345,6 +353,16 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
         case KEY_RIGHT:
             scr->selected++;
             if(scr->selected >= scr->noutputs) scr->selected = scr->noutputs-1;
+            break;
+       case KEY_NPAGE:
+            active_out->value -= step * 5;
+            clamp_min(active_out);
+            update = true;
+            break;
+       case KEY_PPAGE:
+            active_out->value += step * 5;
+            clamp_max(active_out);
+            update = true;
             break;
         case '\014':
         case 'L':
@@ -364,16 +382,20 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
             active_out->value = (ten_percent * (key -'0')) + active_out->min;
             update= true;
             break;
+        case 'q':
+        case 'Q':
+            return false;
     }
 
     if(update) {
         ncxb_set(conn, active_out->output, active_out->value);
         xcb_aux_sync(conn);
     }
+    return true;
 }
 
-void ncxb_update(void) {
-    ncxb_update_active_screen(&screens[0]);
+bool ncxb_update(void) {
+    return ncxb_update_active_screen(&screens[0]);
 }
 
 void draw_value_bar(int x, int y, int h, long barval) {
@@ -479,9 +501,9 @@ void ncxb_draw(void) {
 int main(int argc, char **argv) {
     ncxb_init(argc, argv);
 
-    while(true) {
+    ncxb_draw();
+    while(ncxb_update()) {
         ncxb_draw();
-        ncxb_update();
     }
 
     ncxb_exit();
