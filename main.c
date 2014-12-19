@@ -346,6 +346,16 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
             scr->selected++;
             if(scr->selected >= scr->noutputs) scr->selected = scr->noutputs-1;
             break;
+       case KEY_NPAGE:
+            active_out->value -= step * 5;
+            if(active_out->value < active_out->min) active_out->value = active_out->min;
+            update = true;
+            break;
+       case KEY_PPAGE:
+            active_out->value += step * 5;
+            if(active_out->value > active_out->max) active_out->value = active_out->max;
+            update = true;
+            break;
         case '\014':
         case 'L':
         case 'l':
