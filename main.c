@@ -312,6 +312,14 @@ void ncxb_exit(void) {
     xcb_aux_sync(conn);
 }
 
+void clamp_max(ncxb_output_t *active_out) {
+    if(active_out->value > active_out->max) active_out->value = active_out->max;
+}
+
+void clamp_min(ncxb_output_t *active_out) {
+    if(active_out->value < active_out->min) active_out->value = active_out->min;
+}
+
 void ncxb_update_active_screen(ncxb_screen_t *scr) {
     int key = getch();
 
@@ -330,12 +338,12 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
     switch(key) {
         case KEY_UP:
             active_out->value += step;
-            if(active_out->value > active_out->max) active_out->value = active_out->max;
+            clamp_max(active_out);
             update = true;
             break;
         case KEY_DOWN:
             active_out->value -= step;
-            if(active_out->value < active_out->min) active_out->value = active_out->min;
+            clamp_min(active_out);
             update = true;
             break;
         case KEY_LEFT:
@@ -348,12 +356,12 @@ void ncxb_update_active_screen(ncxb_screen_t *scr) {
             break;
        case KEY_NPAGE:
             active_out->value -= step * 5;
-            if(active_out->value < active_out->min) active_out->value = active_out->min;
+            clamp_min(active_out);
             update = true;
             break;
        case KEY_PPAGE:
             active_out->value += step * 5;
-            if(active_out->value > active_out->max) active_out->value = active_out->max;
+            clamp_max(active_out);
             update = true;
             break;
         case '\014':
