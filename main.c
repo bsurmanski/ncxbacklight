@@ -33,11 +33,18 @@
 #include <xcb/xproto.h>
 #include <xcb/randr.h>
 #include <sys/signal.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #define PROGCMD "ncxbacklight"
 #define PROGNAME "NCXBacklight"
 #define PROGVER "0.1"
+
+#undef MAX
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+
+#undef MIN
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 WINDOW *window;
 
@@ -60,7 +67,7 @@ static xcb_connection_t *conn = NULL;
 static ncxb_screen_t *screens;
 static int width = 0;
 static int height = 0;
-static bool ncxb_clear = false;
+static bool ncxb_refresh = false;
 static bool ncxb_usecolor = true;
 
 static void ncxb_set(xcb_connection_t *conn, xcb_randr_output_t output, long value) {
@@ -143,6 +150,43 @@ static xcb_atom_t ncxb_get_backlight_atom(xcb_connection_t *conn) {
 CONTINUE:
     free(backlight_reply);
     return ret;
+}
+
+void ncxb_clear(void) {
+    clearok(window, true);
+
+    int i, j;
+    for(j = 0; j < height; j++)
+        for(i = 0; i < width; i++)
+            mvaddch(j, i, ' ');
+}
+
+void ncxb_init_ncurses(void);
+void ncxb_draw(void);
+void ncxb_handle_resize(void) {
+    struct winsize winsz = {0, };
+
+    if(ioctl(fileno(stdout), TIOCGWINSZ, &winsz) >= 0 &&
+            winsz.ws_row && winsz.ws_col) {
+        keypad(window, false);
+        leaveok(window, false);
+        endwin();
+        width = MAX(2, winsz.ws_col);
+        height = MAX(2, winsz.ws_row);
+
+        // from mixer:
+        /*
+         * humf, i don't get it, if only the number of rows change,
+         * ncurses will segfault shortly after (could trigger that with mc as well)
+         */
+        resizeterm(height + 1, width + 1);
+        resizeterm(height, width);
+
+        ncxb_init_ncurses();
+        ncxb_clear();
+        ncxb_draw();
+        refresh();
+    }
 }
 
 void ncxb_exit(void);
@@ -269,6 +313,7 @@ void ncxb_init(int argc, char **argv) {
     signal(SIGQUIT, ncxb_handle_signal);
     signal(SIGTERM, ncxb_handle_signal);
     signal(SIGSEGV, ncxb_handle_signal);
+    signal(SIGWINCH, (void*) ncxb_handle_resize);
 
     int opt;
     do {
@@ -367,7 +412,7 @@ bool ncxb_update_active_screen(ncxb_screen_t *scr) {
         case '\014':
         case 'L':
         case 'l':
-            ncxb_clear = true;
+            ncxb_refresh = true;
             break;
         case '0':
         case '1':
@@ -464,7 +509,7 @@ void draw_frame(int w, int h) {
 }
 
 void ncxb_draw(void) {
-    if(ncxb_clear) {
+    if(ncxb_refresh) {
         clearok(window, true);
     }
 
